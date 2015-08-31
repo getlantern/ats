@@ -1,4 +1,4 @@
-## Lantern chained server implemented by [Apache Traffic Server](http://trafficserver.apache.org/).
+## Lantern chained server implemented using [Apache Traffic Server](http://trafficserver.apache.org/).
 
 ### Installation
 

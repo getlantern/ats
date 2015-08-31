@@ -80,8 +80,6 @@ handle_response(TSHttpTxn txnp)
   // intentionally not return any content
 
   TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
-
-done:
   TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
 }
 

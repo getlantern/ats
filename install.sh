@@ -16,5 +16,6 @@ sed -i 's/\(CONFIG proxy.config.url_remap.remap_required INT\) 1/\1 0/' /etc/tra
 sed -i 's/\(CONFIG proxy.config.http.cache.http INT \) 0/\1 1/' /etc/trafficserver/records.config
 sed -i 's/\(CONFIG proxy.config.reverse_proxy.enabled INT \) 1/\1 0/' /etc/trafficserver/records.config
 sed -i 's/\(CONFIG proxy.config.http.insert_squid_x_forwarded_for INT \) 0/\1 1/' /etc/trafficserver/records.config
+sed -i 's/\(CONFIG proxy.config.http.connect_ports STRING 443 563\)/\1 80 8080 8443 8563 8226/' /etc/trafficserver/records.config
 echo 'Restarting service...'
 service trafficserver restart

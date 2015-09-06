@@ -4,8 +4,13 @@
 
 ```
 sudo AUTH_TOKEN=xxx ./install.sh
+gencert.py # from lantern_aws
+#keytool -export -alias ats -keystore keystore.jks --storepass "Be Your Own Lantern" -rfc -file cert.pem # don't need this anymore
+keytool -v -importkeystore -srckeystore keystore.jks -srcalias ats --srcstorepass "pass" -destkeystore keystore.p12 -deststoretype PKCS12 --deststorepass "pass"
+openssl pkcs12 -in keystore.p12 -passin pass:"pass" -out key.pem -passout pass:"pass"
+mv *.pem /etc/trafficserver
 ```
-Lantern client must using the same auth token to access this chained server.
+Lantern client must using the same auth token to access this chained server, and load the cert if it is using ssl.
 
 ### Development
 

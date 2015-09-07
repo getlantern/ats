@@ -33,8 +33,8 @@ Finaly, configure your Lantern client to use this server
 
 ```
   chainedservers:
-    fallback-192.241.211.121:
-      addr: 192.241.211.121:443
+    my-fallback-server:
+      addr: <ip>:443
       pipelined: true
       cert: "<content of cert.pem here>"
       authtoken: "<AUTH_TOKEN here>"

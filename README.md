@@ -2,19 +2,37 @@
 
 ### Installation
 
+Be sure to generate private key along with certificate before install ATS.
+
 ```
-sudo AUTH_TOKEN=xxx ./install.sh
-gencert.py # from lantern_aws
-#keytool -export -alias ats -keystore keystore.jks --storepass "Be Your Own Lantern" -rfc -file cert.pem # don't need this anymore
-keytool -v -importkeystore -srckeystore keystore.jks -srcalias ats --srcstorepass "pass" -destkeystore keystore.p12 -deststoretype PKCS12 --deststorepass "pass"
-openssl pkcs12 -in keystore.p12 -passin pass:"pass" -out key.pem -passout pass:"pass"
-mv *.pem /etc/trafficserver
+CERT_PASS=MY_VERY_OWN_PASSWORD
+IP=`ifconfig eth0 | grep "inet addr" | awk -F ':' '{print $2}' | awk '{print $1}'`
+keytool -genkeypair -keystore keystore.jks -alias ats -keypass "$CERT_PASS" -storepass "$CERT_PASS" -ext san=ip:$IP -dname 'CN=Seacoasts Furtwngler, O=Poising Parched, L=Bin, S=California, C=US' -startdate -3m-27d -keyalg RSA -keysize 2048 -validity 730
+keytool -v -importkeystore -srckeystore keystore.jks -srcalias ats --srcstorepass "$CERT_PASS" -destkeystore keystore.p12 -deststoretype PKCS12 --deststorepass "$CERT_PASS"
+openssl pkcs12 -in keystore.p12 -passin pass:"$CERT_PASS" -out key.pem -passout pass:"$CERT_PASS" # key.pem will be used by ATS
+keytool -export -alias ats -keystore keystore.jks --storepass "$CERT_PASS" -rfc -file cert.pem # cert.pem will be the in chained server config
 ```
-Lantern client must using the same auth token to access this chained server, and load the cert if it is using ssl.
+Then install ATS by single command
+```
+sudo AUTH_TOKEN=xxx CERT_FILE=<path of key.pem> CERT_PASS=xxx ./install.sh
+```
+Then configure your Lantern client to use this server
+
+```
+  chainedservers:
+    fallback-192.241.211.121:
+      addr: 192.241.211.121:443
+      pipelined: true
+      cert: "<content of cert.pem here>"
+      authtoken: "<AUTH_TOKEN here>"
+      weight: 1000000
+      qos: 10
+      trusted: true
+```
 
 ### Development
 
-Addition packages are required to compile the simple auth plugin
+The simple auth plugin, lantern-auth.so, is built on a 64bit Ubuntu 14.10 box. Addition packages are required to compile it.
 
 ```
 sudo apt-get -y install autoconf libtool pkg-config openssl tcl tcl-dev libxml2-dev libpcre3-dev
@@ -24,4 +42,4 @@ sudo apt-get -y install autoconf libtool pkg-config openssl tcl tcl-dev libxml2-
 tsxs -I ~/trafficserver-5.3.1/lib/ts/ -o lantern-auth.so -c lantern-auth.c
 ```
 
-Then you can run `install.sh` again to make the new plugin into effect.
+Then you can run `install.sh` again to take the new plugin into effect.

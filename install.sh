@@ -21,6 +21,7 @@ if [ ! -r "$CERT_FILE" ]; then
 fi
 
 echo 'Installing package...'
+mkdir -p $PREFIX
 curl -L https://s3.amazonaws.com/lantern-aws/apache-traffic-server-5.3.1-ubuntu-14-64bit.tar.gz | tar zxC $PREFIX
 echo 'Copying plugin and cert...'
 cp ./lantern-auth.so $PLUGIN_DIR/

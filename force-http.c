@@ -1,8 +1,8 @@
 /** @file
 
-  A plugin that performs Lantern customized HTTP header authentication
+	A plugin that forces HTTP to origin server if request method is not CONNECT
 
-*/
+ */
 
 
 #include <stdio.h>
@@ -13,90 +13,95 @@
 #include "ts/ts.h"
 #include "ink_defs.h"
 
-const char AUTH_HEADER[] = "X-LANTERN-AUTH-TOKEN";
-const char AUTH_HEADER_LEN = sizeof(AUTH_HEADER)/sizeof(char)-1;
-const static char* auth_token;
-static size_t auth_token_len;
-const static char* status_forbidden;
-static size_t status_forbidden_len;
-
-  static void
-handle_dns(TSHttpTxn txnp, TSCont contp)
+				static void
+handle_request(TSHttpTxn txnp, TSCont contp)
 {
-  TSMBuffer bufp;
-  TSMLoc hdr_loc;
-  TSMLoc method_loc;
-  TSMLoc url_loc;
-  const char *method, *host;
-  int method_length, host_length;
+				TSMBuffer bufp;
+				TSMLoc hdr_loc;
+				TSMLoc url_loc;
+				const char *method, *scheme;
+				int method_length, scheme_length;
+				int port;
 
-  if (TSHttpTxnClientReqGet(txnp, &bufp, &hdr_loc) != TS_SUCCESS) {
-    TSError("couldn't retrieve client request header\n");
-    goto done;
-  }
+				if (TSHttpTxnClientReqGet(txnp, &bufp, &hdr_loc) != TS_SUCCESS) {
+								TSError("couldn't retrieve client request header\n");
+								goto done;
+				}
 
-  method = TSHttpHdrMethodGet(bufp, hdr_loc, &method_loc)
-  if (!method) {
-    TSError("couldn't retrieve request method\n");
-    TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
-    goto done;
-  }
+				method = TSHttpHdrMethodGet(bufp, hdr_loc, &method_length);
+				if (!method) {
+								TSError("couldn't retrieve request method\n");
+								goto clear_hdr;
+				}
+				if (strncmp(method, "CONNECT", method_length) == 0) {
+								goto clear_hdr;
+				}
+				if (TSHttpHdrUrlGet(bufp, hdr_loc, &url_loc) != TS_SUCCESS) {
+								TSError("couldn't retrieve request url\n");
+								goto clear_hdr;
+				}
 
-  host = TSUrlGet(bufp, url_loc, &host_length);
-  if (!host) {
-    TSError("couldn't retrieve request hostname\n");
-    TSHandleMLocRelease(bufp, hdr_loc, url_loc);
-    TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
-    goto done;
-  }
-
-  TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
-  TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
-  return;
-
+				scheme = TSUrlSchemeGet(bufp, url_loc, &scheme_length);
+				if (!scheme) {
+								TSError("couldn't retrieve request schemename\n");
+								goto clear_url;
+				}
+				if (TSUrlSchemeSet(bufp, url_loc, "http", -1) != TS_SUCCESS) {
+								TSError("couldn't set request scheme\n");
+								goto clear_url;
+				}
+				port = TSUrlPortGet(bufp, url_loc);
+				if (!port) {
+								TSError("couldn't retrieve request port\n");
+								goto clear_url;
+				}
+				if (TSUrlPortSet(bufp, url_loc, 80) != TS_SUCCESS) {
+								TSError("couldn't set request port\n");
+								goto clear_url;
+				}
+				if (TSHttpHdrUrlSet(bufp, hdr_loc, url_loc) != TS_SUCCESS) {
+								TSError("couldn't set request url\n");
+								goto clear_url;
+				}
+				TSError("set scheme from %s to http for method %s\n", scheme, method);
+				TSError("set port from %d to 80 for method %s\n", port, method);
+clear_url:
+				TSHandleMLocRelease(bufp, hdr_loc, url_loc);
+clear_hdr:
+				TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
 done:
-  TSHttpTxnHookAdd(txnp, TS_HTTP_SEND_RESPONSE_HDR_HOOK, contp);
-  TSHttpTxnReenable(txnp, TS_EVENT_HTTP_ERROR);
+				TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
 }
 
-  static int
+				static int
 force_http_plugin(TSCont contp, TSEvent event, void *edata)
 {
-  TSHttpTxn txnp = (TSHttpTxn)edata;
+				TSHttpTxn txnp = (TSHttpTxn)edata;
 
-  switch (event) {
-    case TS_EVENT_HTTP_READ_REQUEST_HDR:
-      handle_dns(txnp, contp);
-      return 0;
-    default:
-      break;
-  }
+				switch (event) {
+								case TS_EVENT_HTTP_READ_REQUEST_HDR:
+												handle_request(txnp, contp);
+												return 0;
+								default:
+												break;
+				}
 
-  return 0;
+				return 0;
 }
 
-  void
+				void
 TSPluginInit(int argc ATS_UNUSED, const char *argv[] ATS_UNUSED)
 {
-  TSPluginRegistrationInfo info;
+				TSPluginRegistrationInfo info;
 
-  info.plugin_name = "lantern-customized-authentication";
-  info.vendor_name = "BNS";
-  info.support_email = "team@getlantern.org";
+				info.plugin_name = "force-http-to-origin-server";
+				info.vendor_name = "BNS";
+				info.support_email = "team@getlantern.org";
 
-  if (TSPluginRegister(TS_SDK_VERSION_3_0, &info) != TS_SUCCESS) {
-    TSError("Plugin registration failed.\n");
-    return;
-  }
+				if (TSPluginRegister(TS_SDK_VERSION_3_0, &info) != TS_SUCCESS) {
+								TSError("Plugin registration failed.\n");
+								return;
+				}
 
-  if (argc < 2) {
-    TSError("no auth token provided.\n");
-    return;
-  }
-  auth_token = TSstrdup(argv[1]);
-  auth_token_len = strlen(auth_token);
-  status_forbidden = TSHttpHdrReasonLookup(TS_HTTP_STATUS_FORBIDDEN);
-  status_forbidden_len = strlen(TSHttpHdrReasonLookup(TS_HTTP_STATUS_FORBIDDEN));
-
-  TSHttpHookAdd(TS_HTTP_READ_REQUEST_HDR_HOOK, TSContCreate(force_http_plugin, NULL));
+				TSHttpHookAdd(TS_HTTP_READ_REQUEST_HDR_HOOK, TSContCreate(force_http_plugin, NULL));
 }

@@ -30,10 +30,12 @@ echo 'Changing configuration...'
 echo "$PLUGIN_DIR/lantern-auth.so $AUTH_TOKEN" > $CONFIG_DIR/plugin.config
 echo "dest_ip=* ssl_cert_name=key.pem ssl_key_dialog=\"exec:/bin/echo $CERT_PASS\"" > $CONFIG_DIR/ssl_multicert.config
 cp ./records.config $CONFIG_DIR/
+cp ./remap.config $CONFIG_DIR/
+cp $PREFIX/bin/trafficserver /etc/init.d/
 # sed -i 's/\(CONFIG proxy.config.url_remap.remap_required INT\) 1/\1 0/' $PREFIX/etc/trafficserver/records.config
 # sed -i 's/\(CONFIG proxy.config.http.cache.http INT \) 0/\1 1/' $PREFIX/etc/trafficserver/records.config
 # sed -i 's/\(CONFIG proxy.config.reverse_proxy.enabled INT \) 1/\1 0/' $PREFIX/etc/trafficserver/records.config
 # sed -i 's/\(CONFIG proxy.config.http.insert_squid_x_forwarded_for INT \) 0/\1 1/' $PREFIX/etc/trafficserver/records.config
 # sed -i 's/\(CONFIG proxy.config.http.connect_ports STRING 443 563\)/\1 80 8080 8443 8563 8226/' $PREFIX/etc/trafficserver/records.config
 echo 'Starting service...'
-$PREFIX/bin/trafficserver start
+service trafficserver restart

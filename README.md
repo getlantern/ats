@@ -55,4 +55,8 @@ sudo apt-get -y install autoconf libtool pkg-config libssl-dev tcl-dev libxml2-d
 tsxs -I ~/trafficserver-5.3.1/lib/ts/ -o lantern-auth.so -c lantern-auth.c
 ```
 
-Then you can run `install.sh` again to take the new plugin into effect.
+Then take it into effect.
+```
+copy lantern-auth.so /opt/ts/libexec/trafficserver
+sudo service trafficserver reload
+```

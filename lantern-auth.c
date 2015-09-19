@@ -31,24 +31,24 @@ handle_dns(TSHttpTxn txnp, TSCont contp)
 	int authval_length;
 
 	if (TSHttpTxnClientReqGet(txnp, &bufp, &hdr_loc) != TS_SUCCESS) {
-		TSError("couldn't retrieve client request header\n");
+		TSError("couldn't retrieve client request header");
 		goto done;
 	}
 
 	field_loc = TSMimeHdrFieldFind(bufp, hdr_loc, AUTH_HEADER, AUTH_HEADER_LEN);
-	if (!field_loc) {
-		TSError("no %s field\n", AUTH_HEADER);
-		goto clear_hdr;
+	if (TS_NULL_MLOC == field_loc) {
+		TSError("no %s field", AUTH_HEADER);
+		goto print_client_ip;
 	}
 
 	val = TSMimeHdrFieldValueStringGet(bufp, hdr_loc, field_loc, -1, &authval_length);
 	if (NULL == val) {
-		TSError("no value in %s field\n", AUTH_HEADER);
+		TSError("no value in %s field", AUTH_HEADER);
 		goto clear_field;
 	}
 
-	if (strncmp(val, auth_token, auth_token_len) != 0) {
-		TSError("lantern customized token mismatch\n");
+	if (authval_length != auth_token_len || strncmp(val, auth_token, auth_token_len) != 0) {
+		TSError("lantern customized token mismatch");
 		goto clear_field;
 	}
 
@@ -58,22 +58,50 @@ handle_dns(TSHttpTxn txnp, TSCont contp)
 	return;
 
 clear_field:
-	{
-		struct sockaddr const *addr = TSHttpTxnClientAddrGet(txnp);
-		if (addr) {
-			socklen_t addr_size = 0;
-			if (addr->sa_family == AF_INET)
-				addr_size = sizeof(struct sockaddr_in);
-			else if (addr->sa_family == AF_INET6)
-				addr_size = sizeof(struct sockaddr_in6);
-			if (addr_size > 0) {
-				char clientstring[INET6_ADDRSTRLEN];
-				if (NULL != inet_ntop(addr->sa_family, addr, clientstring, addr_size))
-					TSError("client ip is %s\n", clientstring);
-			}
-		}
-	}
 	TSHandleMLocRelease(bufp, hdr_loc, field_loc);
+print_client_ip:
+	{
+		char ip_str[INET6_ADDRSTRLEN];
+		struct sockaddr const *addr = TSHttpTxnClientAddrGet(txnp);
+		if (NULL == addr) {
+			TSError("couldn't get client ip");
+			goto print_host;
+		}
+		socklen_t addr_size = 0;
+		if (addr->sa_family == AF_INET)
+			addr_size = sizeof(struct sockaddr_in);
+		else if (addr->sa_family == AF_INET6)
+			addr_size = sizeof(struct sockaddr_in6);
+		if (addr_size == 0) {
+			TSError("unsupported address family");
+			goto print_host;
+		}
+		if (NULL == inet_ntop(addr->sa_family, addr, ip_str, addr_size)) {
+			TSError("inet_ntop error");
+			goto print_host;
+		}
+		TSError("client ip is %s", ip_str);
+	}
+print_host:
+	{
+		TSMLoc url_loc;
+		const char *host;
+		int host_length;
+		if (TSHttpHdrUrlGet(bufp, hdr_loc, &url_loc) != TS_SUCCESS) {
+			TSError("couldn't retrieve request url.");
+			goto clear_hdr;
+		}
+
+		host = TSUrlHostGet(bufp, url_loc, &host_length);
+		if (NULL == host) {
+			TSError("couldn't retrieve request hostname\n");
+			TSHandleMLocRelease(bufp, hdr_loc, url_loc);
+			goto clear_hdr;
+		}
+		TSError("requested host is %s", host);
+		TSHandleMLocRelease(bufp, hdr_loc, url_loc);
+
+	}
 clear_hdr:
 	TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
 done:
@@ -106,12 +134,12 @@ TSPluginInit(int argc ATS_UNUSED, const char *argv[] ATS_UNUSED)
 	info.support_email = "team@getlantern.org";
 
 	if (TSPluginRegister(TS_SDK_VERSION_3_0, &info) != TS_SUCCESS) {
-		TSError("Plugin registration failed.\n");
+		TSError("Plugin registration failed.");
 		return;
 	}
 
 	if (argc < 2) {
-		TSError("no auth token provided.\n");
+		TSError("No auth token provided.");
 		return;
 	}
 	auth_token = TSstrdup(argv[1]);

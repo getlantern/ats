@@ -1,6 +1,6 @@
 /** @file
 
-  A plugin that performs Lantern customized HTTP header authentication
+  A plugin that performs Lantern token based HTTP authentication
 
  */
 
@@ -48,7 +48,7 @@ handle_dns(TSHttpTxn txnp, TSCont contp)
 	}
 
 	if (authval_length != auth_token_len || strncmp(val, auth_token, auth_token_len) != 0) {
-		TSError("lantern customized token mismatch");
+		TSError("lantern auth token mismatch");
 		goto clear_field;
 	}
 
@@ -61,22 +61,25 @@ clear_field:
 	TSHandleMLocRelease(bufp, hdr_loc, field_loc);
 print_client_ip:
 	{
+		void *ip;
 		char ip_str[INET6_ADDRSTRLEN];
 		struct sockaddr const *addr = TSHttpTxnClientAddrGet(txnp);
+		const char *ntop_result;
 		if (NULL == addr) {
 			TSError("couldn't get client ip");
 			goto print_host;
 		}
-		socklen_t addr_size = 0;
-		if (addr->sa_family == AF_INET)
-			addr_size = sizeof(struct sockaddr_in);
-		else if (addr->sa_family == AF_INET6)
-			addr_size = sizeof(struct sockaddr_in6);
-		if (addr_size == 0) {
+		if (addr->sa_family == AF_INET) {
+			ip = &(((struct sockaddr_in*)addr)->sin_addr);
+			ntop_result = inet_ntop(addr->sa_family, ip, ip_str, sizeof(struct sockaddr_in));
+		} else if (addr->sa_family == AF_INET6) {
+			ip = &(((struct sockaddr_in6*)addr)->sin6_addr);
+			ntop_result = inet_ntop(addr->sa_family, ip, ip_str, sizeof(struct sockaddr_in6));
+		} else {
 			TSError("unsupported address family");
 			goto print_host;
 		}
-		if (NULL == inet_ntop(addr->sa_family, addr, ip_str, addr_size)) {
+		if (NULL == ntop_result) {
 			TSError("inet_ntop error");
 			goto print_host;
 		}
@@ -98,7 +101,7 @@ print_host:
 			TSHandleMLocRelease(bufp, hdr_loc, url_loc);
 			goto clear_hdr;
 		}
-		TSError("requested host is %s", host);
+		TSError("requested host is %.*s", host_length, host);
 		TSHandleMLocRelease(bufp, hdr_loc, url_loc);
 
 	}
@@ -129,7 +132,7 @@ TSPluginInit(int argc ATS_UNUSED, const char *argv[] ATS_UNUSED)
 {
 	TSPluginRegistrationInfo info;
 
-	info.plugin_name = "lantern-customized-authentication";
+	info.plugin_name = "lantern-token-based-authentication";
 	info.vendor_name = "BNS";
 	info.support_email = "team@getlantern.org";
 

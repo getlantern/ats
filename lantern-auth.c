@@ -15,9 +15,16 @@
 #include "ts/ts.h"
 #include "ink_defs.h"
 
+#define MAX_TOKENS 100
+
+typedef struct token_t {
+        char *value;
+        size_t length;
+} token_t;
+
 const char AUTH_HEADER[] = "X-LANTERN-AUTH-TOKEN";
-const static char* auth_token;
-static size_t auth_token_len;
+static token_t tokens[MAX_TOKENS];
+static int n_tokens;
 
 	static void
 handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
@@ -26,14 +33,15 @@ handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
 	TSMLoc hdr_loc;
 	TSMLoc field_loc;
 	const char *authval;
+        int i;
 
 	int authval_length;
 
 	if (TSHttpTxnClientReqGet(txnp, &bufp, &hdr_loc) != TS_SUCCESS) {
 		TSError("couldn't retrieve client request header");
-		goto done;
+		goto reply_error;
 	}
-	// case insensitive comparasion
+	// Case insensitive comparison
 	field_loc = TSMimeHdrFieldFind(bufp, hdr_loc, AUTH_HEADER, -1);
 	if (TS_NULL_MLOC == field_loc) {
 		TSError("no %s field", AUTH_HEADER);
@@ -46,10 +54,18 @@ handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
 		goto clear_field;
 	}
 
-	if (authval_length != auth_token_len || strncmp(authval, auth_token, auth_token_len) != 0) {
-		TSError("lantern auth token mismatch");
-		goto clear_field;
-	}
+        // Check all tokens
+        for (i = 0; i < n_tokens; i++) {
+                if (authval_length == tokens[i].length &&
+                    strncmp(authval, tokens[i].value, tokens[i].length) == 0) {
+                        goto reply_ok;
+                }
+        }
+        TSError("lantern auth token mismatch");
+        goto clear_field;
+
+        /* OK handling section */
+reply_ok:
 	// remove auth header to prevent upstream from seeing it
 	if (TSMimeHdrFieldDestroy(bufp, hdr_loc, field_loc) != TS_SUCCESS) {
 		TSError("couldn't remove %s header", AUTH_HEADER);
@@ -59,6 +75,7 @@ handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
 	TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
 	return;
 
+        /* Error handling section */
 clear_field:
 	TSHandleMLocRelease(bufp, hdr_loc, field_loc);
 print_client_ip:
@@ -109,7 +126,7 @@ print_host:
 	}
 clear_hdr:
 	TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
-done:
+reply_error:
 	TSHttpTxnHookAdd(txnp, TS_HTTP_SEND_RESPONSE_HDR_HOOK, contp);
 	TSHttpTxnReenable(txnp, TS_EVENT_HTTP_ERROR);
 }
@@ -198,12 +215,18 @@ TSPluginInit(int argc ATS_UNUSED, const char *argv[] ATS_UNUSED)
 		return;
 	}
 
+        /* By default, use the provided token
+           Note: it will be overwritten if tokens.txt is found */
 	if (argc < 2) {
 		TSError("No auth token provided.");
 		return;
 	}
-	auth_token = TSstrdup(argv[1]);
-	auth_token_len = strlen(auth_token);
+	char *auth_token = TSstrdup(argv[1]);
+        tokens[0] = (token_t){
+                auth_token,
+                strlen(auth_token)
+        };
+        n_tokens = 1;
 
 	TSHttpHookAdd(TS_HTTP_OS_DNS_HOOK, TSContCreate(auth_plugin, NULL));
 }

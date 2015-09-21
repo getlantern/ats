@@ -82,7 +82,7 @@ print_client_ip:
 			TSError("inet_ntop error");
 			goto print_host;
 		}
-		TSError("client ip is %s", ip_str);
+		TSError("client ip: %s", ip_str);
 	}
 print_host:
 	{
@@ -96,18 +96,44 @@ print_host:
 
 		host = TSUrlHostGet(bufp, url_loc, &host_length);
 		if (NULL == host) {
-			TSError("couldn't retrieve request hostname\n");
+			TSError("couldn't retrieve request hostname");
 			TSHandleMLocRelease(bufp, hdr_loc, url_loc);
 			goto clear_hdr;
 		}
-		TSError("requested host is %.*s", host_length, host);
+		TSError("host to visit: %.*s", host_length, host);
 		TSHandleMLocRelease(bufp, hdr_loc, url_loc);
 
 	}
 clear_hdr:
 	TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
 done:
-	TSHttpTxnReenable(txnp, TS_EVENT_HTTP_SSN_CLOSE);
+	TSHttpTxnHookAdd(txnp, TS_HTTP_SEND_RESPONSE_HDR_HOOK, contp);
+	TSHttpTxnReenable(txnp, TS_EVENT_HTTP_ERROR);
+}
+
+	static void
+handle_response(TSHttpTxn txnp)
+{
+	const char default_reason[] = "Not Found on Accelerator";
+	// Same as /proxy/config/body_factory/default/urlrouting#no_mapping of ATS 5.3.1
+	const char default_resp[] = "<HTML>\n<HEAD>\n<TITLE>Not Found on Accelerator</TITLE>\n</HEAD>\n\n<BODY BGCOLOR=\"white\" FGCOLOR=\"black\">\n<H1>Not Found on Accelerator</H1>\n<HR>\n\n<FONT FACE=\"Helvetica,Arial\"><B>\nDescription: Your request on the specified host was not found.\nCheck the location and try again.\n</B></FONT>\n<HR>\n</BODY>";
+	size_t default_resp_len = sizeof(default_resp)/sizeof(char) - 1;
+	TSMBuffer bufp;
+	TSMLoc hdr_loc;
+	if (TSHttpTxnClientRespGet(txnp, &bufp, &hdr_loc) != TS_SUCCESS) {
+		TSError("couldn't retrieve client response header");
+		return;
+	}
+	if (TSHttpHdrStatusSet(bufp, hdr_loc, TS_HTTP_STATUS_NOT_FOUND) != TS_SUCCESS) {
+		TSError("couldn't set http status code");
+	}
+	if (TSHttpHdrReasonSet(bufp, hdr_loc, default_reason, -1) != TS_SUCCESS) {
+		TSError("couldn't set http status reason");
+	}
+	TSHttpTxnErrorBodySet(txnp, TSstrdup(default_resp), default_resp_len, TSstrdup("text/html"));
+
+	TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
+	TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
 }
 
 	static int
@@ -119,10 +145,12 @@ auth_plugin(TSCont contp, TSEvent event, void *edata)
 		case TS_EVENT_HTTP_OS_DNS:
 			handle_lantern_auth(txnp, contp);
 			return 0;
+		case TS_EVENT_HTTP_SEND_RESPONSE_HDR:
+			handle_response(txnp);
+			return 0;
 		default:
 			break;
 	}
-
 	return 0;
 }
 

@@ -57,6 +57,6 @@ tsxs -I ~/trafficserver-5.3.1/lib/ts/ -o lantern-auth.so -c lantern-auth.c
 
 Then take it into effect.
 ```
-copy lantern-auth.so /opt/ts/libexec/trafficserver
+cp lantern-auth.so /opt/ts/libexec/trafficserver
 sudo service trafficserver reload
 ```

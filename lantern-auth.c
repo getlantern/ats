@@ -18,6 +18,18 @@
 #define MAX_TOKENS 100
 #define RETRY_TIME 10
 
+
+typedef struct contp_data {
+  enum calling_func {
+    HANDLE_DNS,
+    HANDLE_RESPONSE,
+    READ_TOKEN_LIST,
+  } cf;
+
+  TSHttpTxn txnp;
+
+} cdata;
+
 typedef struct token_t {
         char *value;
         size_t length;
@@ -29,6 +41,58 @@ static int n_tokens;
 
 static TSMutex tokens_mutex;
 static TSCont global_contp;
+
+
+static void
+read_token_list(TSCont contp)
+{
+        char tokens_file[1024];
+        TSFile file;
+
+        sprintf(tokens_file, "%s/tokens.txt", TSPluginDirGet());
+        file = TSfopen(tokens_file, "r");
+        n_tokens = 0;
+
+        /* If the Mutext lock is not successful try again in RETRY_TIME */
+        if (TSMutexLockTry(tokens_mutex) != TS_SUCCESS) {
+                if (file != NULL) {
+                        TSfclose(file);
+                }
+                TSContSchedule(contp, RETRY_TIME, TS_THREAD_POOL_DEFAULT);
+                return;
+        }
+
+        if (file != NULL) {
+                char buffer[1024];
+
+                while (TSfgets(file, buffer, sizeof(buffer) - 1) != NULL && n_tokens < MAX_TOKENS) {
+                        char *eol;
+                        if ((eol = strstr(buffer, "\r\n")) != NULL) {
+                                /* To handle newlines on Windows */
+                                *eol = '\0';
+                        } else if ((eol = strchr(buffer, '\n')) != NULL) {
+                                *eol = '\0';
+                        } else {
+                                /* Not a valid line, skip it */
+                                continue;
+                        }
+                        if (tokens[n_tokens].value != NULL) {
+                                TSfree(tokens[n_tokens].value);
+                        }
+                        tokens[n_tokens] = (token_t){
+                                TSstrdup(buffer),
+                                strlen(buffer)
+                        };
+                        n_tokens++;
+                }
+
+                TSfclose(file);
+        } else {
+                TSError("[lantern-plugin] Unable to open %s. Tokens list won't be updated.", tokens_file);
+        }
+
+        TSMutexUnlock(tokens_mutex);
+}
 
 static void
 handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
@@ -136,7 +200,7 @@ reply_error:
 }
 
 static void
-handle_response(TSHttpTxn txnp)
+handle_response(TSHttpTxn txnp, TSCont contp ATS_UNUSED)
 {
 	const char default_reason[] = "Not Found on Accelerator";
 	// Same as /proxy/config/body_factory/default/urlrouting#no_mapping of ATS 5.3.1
@@ -188,72 +252,84 @@ handle_response(TSHttpTxn txnp)
 }
 
 static int
-auth_plugin(TSCont contp, TSEvent event, void *edata)
+lantern_auth_plugin(TSCont contp, TSEvent event, void *edata)
 {
-	TSHttpTxn txnp = (TSHttpTxn)edata;
+	TSHttpTxn txnp;
+        cdata *cd;
 
 	switch (event) {
-		case TS_EVENT_HTTP_OS_DNS:
-			handle_lantern_auth(txnp, contp);
-			return 0;
-		case TS_EVENT_HTTP_SEND_RESPONSE_HDR:
-			handle_response(txnp);
-			return 0;
-		default:
-			break;
+        case TS_EVENT_HTTP_TXN_START:
+                txnp = (TSHttpTxn)edata;
+                TSCont txn_contp;
+
+                txn_contp = TSContCreate((TSEventFunc)lantern_auth_plugin, TSMutexCreate());
+                /* Create the data that'll be associated with the continuation */
+                cd = (cdata *)TSmalloc(sizeof(cdata));
+                TSContDataSet(txn_contp, cd);
+                cd->txnp = txnp;
+
+                TSHttpTxnHookAdd(txnp, TS_HTTP_OS_DNS_HOOK, txn_contp);
+                TSHttpTxnHookAdd(txnp, TS_HTTP_TXN_CLOSE_HOOK, txn_contp);
+
+                TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
+                return 0;
+        case TS_EVENT_HTTP_OS_DNS:
+                if (contp != global_contp) {
+                        cd = (cdata *)TSContDataGet(contp);
+                        cd->cf = HANDLE_DNS;
+                        /* Lantern Authentication is done at OS DNS resolution time */
+                        handle_lantern_auth(cd->txnp, contp);
+                        return 0;
+                } else {
+                        break;
+                }
+        case TS_EVENT_HTTP_TXN_CLOSE:
+                txnp = (TSHttpTxn)edata;
+                if (contp != global_contp) {
+                        //destroy_continuation(txnp, contp);
+                        cd = (cdata *)TSContDataGet(contp);
+                        if (cd != NULL) {
+                                TSfree(cd);
+                        }
+                        TSContDestroy(contp);
+                        TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
+                }
+                break;
+        case TS_EVENT_HTTP_SEND_RESPONSE_HDR:
+                if (contp != global_contp) {
+                        cd = (cdata *)TSContDataGet(contp);
+                        cd->cf = HANDLE_RESPONSE;
+                        handle_response(cd->txnp, contp);
+                        return 0;
+                } else {
+                        break;
+                }
+        case TS_EVENT_TIMEOUT:
+                /* When mutex lock is not acquired and continuation is rescheduled,
+                   the plugin is called back with TS_EVENT_TIMEOUT with a NULL
+                   edata. We need to decide, in which function did the MutexLock
+                   failed and call that function again */
+                if (contp != global_contp) {
+                        cd = (cdata *)TSContDataGet(contp);
+                        switch (cd->cf) {
+                        case HANDLE_DNS:
+                                handle_lantern_auth(cd->txnp, contp);
+                                return 0;
+                        case HANDLE_RESPONSE:
+                                handle_response(cd->txnp, contp);
+                                return 0;
+                        default:
+                                TSDebug("lantern_auth", "This event was unexpected: %d\n", event);
+                                break;
+                        }
+                } else {
+                        read_token_list(contp);
+                        return 0;
+                }
+        default:
+                break;
 	}
 	return 0;
-}
-
-static void
-read_tokens_list(TSCont contp)
-{
-        char tokens_file[1024];
-        TSFile file;
-
-        sprintf(tokens_file, "%s/tokens.txt", TSPluginDirGet());
-        file = TSfopen(tokens_file, "r");
-        n_tokens = 0;
-
-        /* If the Mutext lock is not successful try again in RETRY_TIME */
-        if (TSMutexLockTry(tokens_mutex) != TS_SUCCESS) {
-                if (file != NULL) {
-                        TSfclose(file);
-                }
-                TSContSchedule(contp, RETRY_TIME, TS_THREAD_POOL_DEFAULT);
-                return;
-        }
-
-        if (file != NULL) {
-                char buffer[1024];
-
-                while (TSfgets(file, buffer, sizeof(buffer) - 1) != NULL && n_tokens < MAX_TOKENS) {
-                        char *eol;
-                        if ((eol = strstr(buffer, "\r\n")) != NULL) {
-                                /* To handle newlines on Windows */
-                                *eol = '\0';
-                        } else if ((eol = strchr(buffer, '\n')) != NULL) {
-                                *eol = '\0';
-                        } else {
-                                /* Not a valid line, skip it */
-                                continue;
-                        }
-                        if (tokens[n_tokens].value != NULL) {
-                                TSfree(tokens[n_tokens].value);
-                        }
-                        tokens[n_tokens] = (token_t){
-                                TSstrdup(buffer),
-                                strlen(buffer)
-                        };
-                        n_tokens++;
-                }
-
-                TSfclose(file);
-        } else {
-                TSError("[lantern-plugin] Unable to open %s. Tokens list won't be updated.", tokens_file);
-        }
-
-        TSMutexUnlock(tokens_mutex);
 }
 
 void
@@ -266,9 +342,11 @@ TSPluginInit(int argc ATS_UNUSED, const char *argv[] ATS_UNUSED)
 	info.support_email = "team@getlantern.org";
 
 	if (TSPluginRegister(TS_SDK_VERSION_3_0, &info) != TS_SUCCESS) {
-		TSError("Plugin registration failed.");
+		TSError("[lantern-auth] Plugin registration failed.");
 		return;
 	}
+
+        tokens_mutex = TSMutexCreate();
 
         /* By default, use the provided token
            Note: it will be overwritten if tokens.txt is found */
@@ -283,8 +361,8 @@ TSPluginInit(int argc ATS_UNUSED, const char *argv[] ATS_UNUSED)
         };
         n_tokens = 1;
 
-        global_contp = TSContCreate(auth_plugin, tokens_mutex);
-        read_tokens_list(global_contp);
+        global_contp = TSContCreate(lantern_auth_plugin, tokens_mutex);
+        read_token_list(global_contp);
 
 	TSHttpHookAdd(TS_HTTP_TXN_START_HOOK, global_contp);
 }

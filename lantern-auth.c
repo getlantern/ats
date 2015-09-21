@@ -116,10 +116,20 @@ handle_response(TSHttpTxn txnp)
 {
 	const char default_reason[] = "Not Found on Accelerator";
 	// Same as /proxy/config/body_factory/default/urlrouting#no_mapping of ATS 5.3.1
-	const char default_resp[] = "<HTML>\n<HEAD>\n<TITLE>Not Found on Accelerator</TITLE>\n</HEAD>\n\n<BODY BGCOLOR=\"white\" FGCOLOR=\"black\">\n<H1>Not Found on Accelerator</H1>\n<HR>\n\n<FONT FACE=\"Helvetica,Arial\"><B>\nDescription: Your request on the specified host was not found.\nCheck the location and try again.\n</B></FONT>\n<HR>\n</BODY>";
+	const char default_resp[] = "<HTML>\n<HEAD>\n<TITLE>Not Found on Accelerator</TITLE>\n</HEAD>\n\n<BODY BGCOLOR=\"white\" FGCOLOR=\"black\">\n<H1>Not Found on Accelerator</H1>\n<HR>\n\n<FONT FACE=\"Helvetica,Arial\"><B>\nDescription: Your request on the specified host was not found.\nCheck the location and try again.\n</B></FONT>\n<HR>\n</BODY>\n";
+	const struct header {
+		const char * const name;
+		const char * const value;
+	} default_headers[] = {
+		{"Cache-Control", "no-store"},
+		{"Content-Type", "text/html"},
+		{"Content-Language", "en"}
+	};
 	size_t default_resp_len = sizeof(default_resp)/sizeof(char) - 1;
 	TSMBuffer bufp;
 	TSMLoc hdr_loc;
+	TSMLoc temp_loc;
+	int i;
 	if (TSHttpTxnClientRespGet(txnp, &bufp, &hdr_loc) != TS_SUCCESS) {
 		TSError("couldn't retrieve client response header");
 		return;
@@ -129,6 +139,23 @@ handle_response(TSHttpTxn txnp)
 	}
 	if (TSHttpHdrReasonSet(bufp, hdr_loc, default_reason, -1) != TS_SUCCESS) {
 		TSError("couldn't set http status reason");
+	}
+	temp_loc = TSMimeHdrFieldFind(bufp, hdr_loc, "Connection", -1);
+	if (NULL == temp_loc) {
+		TSError("No Connection header, should not happen");
+	} else if (TSMimeHdrFieldValueStringSet(bufp, hdr_loc, temp_loc, -1, "keep-alive", -1) != TS_SUCCESS) {
+		TSError("couldn't set Connection header");
+	}
+	for (i = 0; i < sizeof(default_headers)/ sizeof(struct header); i++) {
+		if (TSMimeHdrFieldCreateNamed(bufp, hdr_loc, default_headers[i].name, -1, &temp_loc) != TS_SUCCESS) {
+			TSError("couldn't create %s header", default_headers[i].name);
+		} else {
+			if (TSMimeHdrFieldValueStringSet(bufp, hdr_loc, temp_loc, -1, default_headers[i].value, -1) != TS_SUCCESS) {
+				TSError("couldn't set %s header", default_headers[i].name);
+			} else if (TSMimeHdrFieldAppend(bufp, hdr_loc, temp_loc) != TS_SUCCESS) {
+				TSError("couldn't append %s header", default_headers[i].name);
+			}
+		}
 	}
 	TSHttpTxnErrorBodySet(txnp, TSstrdup(default_resp), default_resp_len, TSstrdup("text/html"));
 

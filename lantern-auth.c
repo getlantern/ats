@@ -25,7 +25,7 @@ handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
 	TSMBuffer bufp;
 	TSMLoc hdr_loc;
 	TSMLoc field_loc;
-	const char *val;
+	const char *authval;
 
 	int authval_length;
 
@@ -40,17 +40,20 @@ handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
 		goto print_client_ip;
 	}
 
-	val = TSMimeHdrFieldValueStringGet(bufp, hdr_loc, field_loc, -1, &authval_length);
-	if (NULL == val) {
+	authval = TSMimeHdrFieldValueStringGet(bufp, hdr_loc, field_loc, -1, &authval_length);
+	if (NULL == authval) {
 		TSError("no value in %s field", AUTH_HEADER);
 		goto clear_field;
 	}
 
-	if (authval_length != auth_token_len || strncmp(val, auth_token, auth_token_len) != 0) {
+	if (authval_length != auth_token_len || strncmp(authval, auth_token, auth_token_len) != 0) {
 		TSError("lantern auth token mismatch");
 		goto clear_field;
 	}
-
+	// remove auth header to prevent upstream from seeing it
+	if (TSMimeHdrFieldDestroy(bufp, hdr_loc, field_loc) != TS_SUCCESS) {
+		TSError("couldn't remove %s header", AUTH_HEADER);
+	};
 	TSHandleMLocRelease(bufp, hdr_loc, field_loc);
 	TSHandleMLocRelease(bufp, TS_NULL_MLOC, hdr_loc);
 	TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);

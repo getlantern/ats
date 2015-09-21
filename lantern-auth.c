@@ -16,12 +16,11 @@
 #include "ink_defs.h"
 
 const char AUTH_HEADER[] = "X-LANTERN-AUTH-TOKEN";
-const char AUTH_HEADER_LEN = sizeof(AUTH_HEADER)/sizeof(char)-1;
 const static char* auth_token;
 static size_t auth_token_len;
 
 	static void
-handle_dns(TSHttpTxn txnp, TSCont contp)
+handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
 {
 	TSMBuffer bufp;
 	TSMLoc hdr_loc;
@@ -34,8 +33,8 @@ handle_dns(TSHttpTxn txnp, TSCont contp)
 		TSError("couldn't retrieve client request header");
 		goto done;
 	}
-
-	field_loc = TSMimeHdrFieldFind(bufp, hdr_loc, AUTH_HEADER, AUTH_HEADER_LEN);
+	// case insensitive comparasion
+	field_loc = TSMimeHdrFieldFind(bufp, hdr_loc, AUTH_HEADER, -1);
 	if (TS_NULL_MLOC == field_loc) {
 		TSError("no %s field", AUTH_HEADER);
 		goto print_client_ip;
@@ -118,7 +117,7 @@ auth_plugin(TSCont contp, TSEvent event, void *edata)
 
 	switch (event) {
 		case TS_EVENT_HTTP_OS_DNS:
-			handle_dns(txnp, contp);
+			handle_lantern_auth(txnp, contp);
 			return 0;
 		default:
 			break;

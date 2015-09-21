@@ -16,6 +16,7 @@
 #include "ink_defs.h"
 
 #define MAX_TOKENS 100
+#define RETRY_TIME 10
 
 typedef struct token_t {
         char *value;
@@ -26,7 +27,10 @@ const char AUTH_HEADER[] = "X-LANTERN-AUTH-TOKEN";
 static token_t tokens[MAX_TOKENS];
 static int n_tokens;
 
-	static void
+static TSMutex tokens_mutex;
+static TSCont global_contp;
+
+static void
 handle_lantern_auth(TSHttpTxn txnp, TSCont contp)
 {
 	TSMBuffer bufp;
@@ -131,7 +135,7 @@ reply_error:
 	TSHttpTxnReenable(txnp, TS_EVENT_HTTP_ERROR);
 }
 
-	static void
+static void
 handle_response(TSHttpTxn txnp)
 {
 	const char default_reason[] = "Not Found on Accelerator";
@@ -183,7 +187,7 @@ handle_response(TSHttpTxn txnp)
 	TSHttpTxnReenable(txnp, TS_EVENT_HTTP_CONTINUE);
 }
 
-	static int
+static int
 auth_plugin(TSCont contp, TSEvent event, void *edata)
 {
 	TSHttpTxn txnp = (TSHttpTxn)edata;
@@ -201,7 +205,58 @@ auth_plugin(TSCont contp, TSEvent event, void *edata)
 	return 0;
 }
 
-	void
+static void
+read_tokens_list(TSCont contp)
+{
+        char tokens_file[1024];
+        TSFile file;
+
+        sprintf(tokens_file, "%s/tokens.txt", TSPluginDirGet());
+        file = TSfopen(tokens_file, "r");
+        n_tokens = 0;
+
+        /* If the Mutext lock is not successful try again in RETRY_TIME */
+        if (TSMutexLockTry(tokens_mutex) != TS_SUCCESS) {
+                if (file != NULL) {
+                        TSfclose(file);
+                }
+                TSContSchedule(contp, RETRY_TIME, TS_THREAD_POOL_DEFAULT);
+                return;
+        }
+
+        if (file != NULL) {
+                char buffer[1024];
+
+                while (TSfgets(file, buffer, sizeof(buffer) - 1) != NULL && n_tokens < MAX_TOKENS) {
+                        char *eol;
+                        if ((eol = strstr(buffer, "\r\n")) != NULL) {
+                                /* To handle newlines on Windows */
+                                *eol = '\0';
+                        } else if ((eol = strchr(buffer, '\n')) != NULL) {
+                                *eol = '\0';
+                        } else {
+                                /* Not a valid line, skip it */
+                                continue;
+                        }
+                        if (tokens[n_tokens].value != NULL) {
+                                TSfree(tokens[n_tokens].value);
+                        }
+                        tokens[n_tokens] = (token_t){
+                                TSstrdup(buffer),
+                                strlen(buffer)
+                        };
+                        n_tokens++;
+                }
+
+                TSfclose(file);
+        } else {
+                TSError("[lantern-plugin] Unable to open %s. Tokens list won't be updated.", tokens_file);
+        }
+
+        TSMutexUnlock(tokens_mutex);
+}
+
+void
 TSPluginInit(int argc ATS_UNUSED, const char *argv[] ATS_UNUSED)
 {
 	TSPluginRegistrationInfo info;
@@ -228,5 +283,8 @@ TSPluginInit(int argc ATS_UNUSED, const char *argv[] ATS_UNUSED)
         };
         n_tokens = 1;
 
-	TSHttpHookAdd(TS_HTTP_OS_DNS_HOOK, TSContCreate(auth_plugin, NULL));
+        global_contp = TSContCreate(auth_plugin, tokens_mutex);
+        read_tokens_list(global_contp);
+
+	TSHttpHookAdd(TS_HTTP_TXN_START_HOOK, global_contp);
 }
